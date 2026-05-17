@@ -3,6 +3,7 @@ const state = {
   eventSource: null,
   streamAbort: null,
   streamReadyTimer: 0,
+  hitRenderQueued: false,
   breakpoints: [],
   hits: [],
   processes: [],
@@ -313,7 +314,18 @@ function appendHit(hit) {
   if (state.hits.length > limit) {
     state.hits.splice(0, state.hits.length - limit);
   }
-  renderHits();
+  scheduleRenderHits();
+}
+
+function scheduleRenderHits() {
+  if (state.hitRenderQueued) {
+    return;
+  }
+  state.hitRenderQueued = true;
+  requestAnimationFrame(() => {
+    state.hitRenderQueued = false;
+    renderHits();
+  });
 }
 
 function renderBreakpoints() {
