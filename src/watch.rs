@@ -33,10 +33,17 @@ pub struct RunningWatch {
 }
 
 impl RunningWatch {
-    pub fn stop(self) {
+    pub async fn stop(self) {
         self.cancel.store(true, Ordering::Relaxed);
-        for task in self.tasks {
+        for task in &self.tasks {
             task.abort();
+        }
+        for task in self.tasks {
+            match task.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => error!("watch task failed while stopping: {}", e),
+            }
         }
     }
 }
@@ -76,7 +83,10 @@ pub fn parse_addr(s: &str) -> Option<u64> {
     u64::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16).ok()
 }
 
-pub fn start_watch<F>(config: WatchConfig, handle_event: F) -> anyhow::Result<(WatchStart, RunningWatch)>
+pub fn start_watch<F>(
+    config: WatchConfig,
+    handle_event: F,
+) -> anyhow::Result<(WatchStart, RunningWatch)>
 where
     F: FnMut(crate::perf::SampleData) + Send + Clone + 'static,
 {
@@ -152,11 +162,5 @@ where
         })
         .collect();
 
-    Ok((
-        WatchStart { threads },
-        RunningWatch {
-            cancel,
-            tasks,
-        },
-    ))
+    Ok((WatchStart { threads }, RunningWatch { cancel, tasks }))
 }

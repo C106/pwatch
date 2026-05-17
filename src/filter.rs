@@ -86,11 +86,9 @@ impl Parser {
             .ok_or_else(|| anyhow::anyhow!("expected register name"))?;
         let reg = parse_reg(&reg_name)?;
         let mask = if self.consume("&") {
-            Some(parse_value(
-                &self
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("expected mask value after '&'"))?,
-            )?)
+            Some(parse_value(&self.next().ok_or_else(|| {
+                anyhow::anyhow!("expected mask value after '&'")
+            })?)?)
         } else {
             None
         };

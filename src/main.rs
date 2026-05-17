@@ -168,7 +168,7 @@ async fn run_watch(command: WatchCommand) -> anyhow::Result<()> {
         futures::future::pending::<()>().await;
     } else {
         tokio::time::sleep(Duration::from_secs(command.timeout)).await;
-        running.stop();
+        running.stop().await;
     }
     Ok(())
 }

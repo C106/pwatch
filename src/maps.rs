@@ -80,7 +80,11 @@ impl MapsCache {
         resolved
     }
 
-    pub fn resolve_expression(&self, pid: u32, expression: &str) -> anyhow::Result<ResolvedAddress> {
+    pub fn resolve_expression(
+        &self,
+        pid: u32,
+        expression: &str,
+    ) -> anyhow::Result<ResolvedAddress> {
         let addr = if let Some(addr) = parse_numeric_addr(expression.trim()) {
             addr
         } else {
@@ -118,13 +122,21 @@ impl MapsCache {
             .ok_or_else(|| anyhow::anyhow!("resolved address overflow: {expression}"))
     }
 
-    fn resolve_cached(&self, pid: u32, addr: u64, now: Instant, force_refresh: bool) -> Option<MapRegion> {
-        self.regions_with(now, pid, force_refresh).ok().and_then(|regions| {
-            regions
-                .iter()
-                .find(|region| region.start <= addr && addr < region.end)
-                .map(|region| region.region.clone())
-        })
+    fn resolve_cached(
+        &self,
+        pid: u32,
+        addr: u64,
+        now: Instant,
+        force_refresh: bool,
+    ) -> Option<MapRegion> {
+        self.regions_with(now, pid, force_refresh)
+            .ok()
+            .and_then(|regions| {
+                regions
+                    .iter()
+                    .find(|region| region.start <= addr && addr < region.end)
+                    .map(|region| region.region.clone())
+            })
     }
 
     fn regions(&self, pid: u32, force_refresh: bool) -> anyhow::Result<Vec<ParsedRegion>> {

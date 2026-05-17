@@ -4,8 +4,10 @@ use nix::sys::mman::{MapFlags, ProtFlags};
 use perf_event_open_sys as sys;
 use std::{
     convert::Infallible,
+    ffi::c_void,
     num::NonZeroUsize,
     os::fd::{FromRawFd, OwnedFd},
+    ptr::NonNull,
 };
 use tokio::io::unix::AsyncFd;
 
@@ -16,6 +18,7 @@ const MAX_EVENTS_PER_READINESS: usize = 128;
 
 pub struct PerfMap {
     mmap_addr: usize,
+    mmap_len: usize,
     fd: AsyncFd<OwnedFd>,
     sample_type: u64,
 }
@@ -67,16 +70,18 @@ impl PerfMap {
             "opened perf breakpoint pid={} type={} addr=0x{:x} len={} sample_type=0x{:x}",
             pid, r#type, addr, len, attrs.sample_type
         );
+        let mmap_len = (1 + (1 << buf_size)) * 4096;
         let mmap_addr = unsafe {
             nix::sys::mman::mmap(
                 None,
-                NonZeroUsize::new((1 + (1 << buf_size)) * 4096).unwrap(),
+                NonZeroUsize::new(mmap_len).unwrap(),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED,
                 &perf_fd,
                 0,
             )
-        }?.as_ptr() as usize;
+        }?
+        .as_ptr() as usize;
         let mmap_page_metadata = unsafe {
             (mmap_addr as *mut sys::bindings::perf_event_mmap_page)
                 .as_mut()
@@ -87,6 +92,7 @@ impl PerfMap {
         }
         Ok(Self {
             mmap_addr: mmap_addr as usize,
+            mmap_len,
             fd: AsyncFd::new(perf_fd)?,
             sample_type: attrs.sample_type,
         })
@@ -178,6 +184,17 @@ impl PerfMap {
             regs,
             backtrace,
         })
+    }
+}
+
+impl Drop for PerfMap {
+    fn drop(&mut self) {
+        let Some(addr) = NonNull::new(self.mmap_addr as *mut c_void) else {
+            return;
+        };
+        if let Err(e) = unsafe { nix::sys::mman::munmap(addr, self.mmap_len) } {
+            warn!("failed to unmap perf ring buffer: {}", e);
+        }
     }
 }
 

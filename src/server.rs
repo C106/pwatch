@@ -21,6 +21,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use futures::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
@@ -33,7 +34,6 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use futures::{stream, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -150,7 +150,10 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     spawn_hit_worker(state.clone(), sample_rx);
 
     let app = Router::new()
-        .route("/breakpoints", post(create_breakpoint).get(list_breakpoints))
+        .route(
+            "/breakpoints",
+            post(create_breakpoint).get(list_breakpoints),
+        )
         .route("/breakpoints/:id", delete(delete_breakpoint))
         .route("/hits", get(get_hits))
         .route("/hits/stream", get(stream_hits))
@@ -261,7 +264,10 @@ async fn list_breakpoints(State(state): State<AppState>) -> impl IntoResponse {
             views.sort_by_key(|view| view.id);
             Json(views).into_response()
         }
-        Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "breakpoint lock poisoned"),
+        Err(_) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "breakpoint lock poisoned",
+        ),
     }
 }
 
@@ -269,16 +275,21 @@ async fn delete_breakpoint(
     State(state): State<AppState>,
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
-    match state.inner.breakpoints.lock() {
-        Ok(mut breakpoints) => {
-            if let Some(entry) = breakpoints.remove(&id) {
-                entry.watch.stop();
-                StatusCode::NO_CONTENT.into_response()
-            } else {
-                error_response(StatusCode::NOT_FOUND, format!("breakpoint {id} not found"))
-            }
+    let entry = match state.inner.breakpoints.lock() {
+        Ok(mut breakpoints) => breakpoints.remove(&id),
+        Err(_) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "breakpoint lock poisoned",
+            )
         }
-        Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "breakpoint lock poisoned"),
+    };
+
+    if let Some(entry) = entry {
+        entry.watch.stop().await;
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        error_response(StatusCode::NOT_FOUND, format!("breakpoint {id} not found"))
     }
 }
 
@@ -289,30 +300,27 @@ async fn get_hits(
     match state.inner.hit_buffer.lock() {
         Ok(buffer) => {
             let limit = query.limit.unwrap_or(100);
-            let mut hits = buffer
-                .iter()
-                .rev()
-                .take(limit)
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut hits = buffer.iter().rev().take(limit).cloned().collect::<Vec<_>>();
             hits.reverse();
             Json(hits).into_response()
         }
-        Err(_) => error_response(StatusCode::INTERNAL_SERVER_ERROR, "hit buffer lock poisoned"),
+        Err(_) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "hit buffer lock poisoned",
+        ),
     }
 }
 
 async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
-    let ready = stream::once(async {
-        Ok::<_, axum::Error>(Event::default().event("ready").data("{}"))
-    });
-    let hits = BroadcastStream::new(state.inner.hit_tx.subscribe()).filter_map(|result| async move {
-        result.ok().map(|hit| {
-            let data = serde_json::to_string(&hit)
-                .map_err(|e| axum::Error::new(e))?;
-            Ok::<_, axum::Error>(Event::default().event("hit").data(data))
-        })
-    });
+    let ready =
+        stream::once(async { Ok::<_, axum::Error>(Event::default().event("ready").data("{}")) });
+    let hits =
+        BroadcastStream::new(state.inner.hit_tx.subscribe()).filter_map(|result| async move {
+            result.ok().map(|hit| {
+                let data = serde_json::to_string(&hit).map_err(|e| axum::Error::new(e))?;
+                Ok::<_, axum::Error>(Event::default().event("hit").data(data))
+            })
+        });
 
     Sse::new(ready.chain(hits))
         .keep_alive(KeepAlive::default())
@@ -472,11 +480,11 @@ fn spawn_hit_worker(state: AppState, mut sample_rx: mpsc::Receiver<QueuedSample>
         let mut processed = 0usize;
         while let Some(sample) = sample_rx.recv().await {
             let maps = state.inner.maps.resolve_many(sample.pid, &sample.data.regs);
-            let hit = state.inner.hit_factory.make_hit_with_maps(
-                sample.breakpoint_id,
-                sample.data,
-                maps,
-            );
+            let hit =
+                state
+                    .inner
+                    .hit_factory
+                    .make_hit_with_maps(sample.breakpoint_id, sample.data, maps);
             state.push_hit(hit);
             processed += 1;
             if processed % 128 == 0 {
@@ -494,7 +502,13 @@ fn now_ms() -> u128 {
 }
 
 fn error_response(status: StatusCode, error: impl ToString) -> axum::response::Response {
-    (status, Json(ErrorBody { error: error.to_string() })).into_response()
+    (
+        status,
+        Json(ErrorBody {
+            error: error.to_string(),
+        }),
+    )
+        .into_response()
 }
 
 async fn add_cors_headers(request: Request<Body>, next: Next) -> axum::response::Response {
