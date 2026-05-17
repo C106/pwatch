@@ -58,6 +58,12 @@ button.secondary {
   color: var(--text);
 }
 
+button.compact {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 button.danger {
   background: rgba(227, 93, 93, 0.15);
   color: #ffb3b3;
@@ -156,6 +162,18 @@ label {
   font-size: 14px;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+}
+
 .panel form {
   display: grid;
   gap: 12px;
@@ -204,6 +222,106 @@ label {
   margin-top: 12px;
 }
 
+.subtle-count {
+  margin: 10px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pid-picker {
+  position: relative;
+}
+
+.process-popup {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111418;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+}
+
+.process-popup[hidden] {
+  display: none;
+}
+
+.process-popup-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.process-list {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.process-item {
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 54px;
+  gap: 4px;
+  border: 1px solid #252b33;
+  border-radius: 6px;
+  background: #111418;
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.process-item:hover {
+  border-color: rgba(77, 157, 224, 0.65);
+  filter: none;
+}
+
+.process-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.process-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.process-title code {
+  color: #a9d7ff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.process-meta,
+.process-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.process-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-empty {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  text-align: center;
+}
+
 .connected {
   background: rgba(35, 181, 143, 0.18);
   color: #73e8c8;
@@ -240,7 +358,44 @@ label {
 }
 
 .toolbar-actions label {
-  width: 110px;
+  width: 150px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.tab {
+  height: 38px;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 14px;
+}
+
+.tab:hover {
+  filter: none;
+  color: var(--text);
+}
+
+.tab.active {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
 }
 
 .table-wrap {

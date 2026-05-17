@@ -133,7 +133,7 @@ where
             let mut handle_event = handle_event.clone();
             threads.push(tid);
             tokio::spawn(async move {
-                let result = map
+                let Err(e) = map
                     .events(move |data| {
                         if cancel.load(Ordering::Relaxed) {
                             return;
@@ -146,9 +146,7 @@ where
                         }
                     })
                     .await;
-                if let Err(e) = result {
-                    error!("error: {}", e);
-                }
+                error!("error: {}", e);
             })
         })
         .collect();

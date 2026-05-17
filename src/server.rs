@@ -1,6 +1,6 @@
 use crate::{
     hit::{Hit, HitFactory},
-    maps::MapsCache,
+    maps::{MapRegion, MapsCache},
     watch::{self, RunningWatch, WatchConfig},
 };
 use axum::{
@@ -23,7 +23,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
+    fs,
     net::SocketAddr,
+    path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -66,6 +68,8 @@ pub struct BreakpointView {
     #[serde(rename = "type")]
     pub type_name: String,
     pub addr: String,
+    pub resolved_addr: String,
+    pub resolved_map: Option<MapRegion>,
     pub threads: Vec<u32>,
     pub created_at_ms: u128,
     pub status: String,
@@ -84,9 +88,30 @@ pub struct CreateBreakpointRequest {
     pub filter: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct ProcessView {
+    pub pid: u32,
+    pub ppid: Option<u32>,
+    pub state: Option<String>,
+    pub comm: String,
+    pub cmdline: Vec<String>,
+    pub exe: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct HitsQuery {
     limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProcessesQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveQuery {
+    addr: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +138,9 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         .route("/breakpoints/:id", delete(delete_breakpoint))
         .route("/hits", get(get_hits))
         .route("/hits/stream", get(stream_hits))
+        .route("/processes", get(list_processes))
+        .route("/processes/:pid/maps", get(list_maps))
+        .route("/processes/:pid/resolve", get(resolve_address))
         .with_state(state)
         .layer(middleware::from_fn(add_cors_headers));
 
@@ -137,8 +165,11 @@ fn create_breakpoint_inner(
 ) -> anyhow::Result<BreakpointView> {
     let (ty, len) = watch::parse_watchpoint_type(&request.type_name)
         .ok_or_else(|| anyhow::anyhow!("invalid watchpoint type: {}", request.type_name))?;
-    let addr = watch::parse_addr(&request.addr)
-        .ok_or_else(|| anyhow::anyhow!("invalid address: {}", request.addr))?;
+    let resolved = state
+        .inner
+        .maps
+        .resolve_expression(request.pid, &request.addr)?;
+    let addr = resolved.value;
     let filter = request
         .filter
         .as_deref()
@@ -152,7 +183,7 @@ fn create_breakpoint_inner(
         pid: request.pid,
         thread: false,
         type_name: request.type_name,
-        addr_text: request.addr,
+        addr_text: resolved.address.clone(),
         ty,
         addr,
         len: len as u64,
@@ -173,7 +204,9 @@ fn create_breakpoint_inner(
         id,
         pid: config.pid,
         type_name: config.type_name,
-        addr: config.addr_text,
+        addr: resolved.expression,
+        resolved_addr: config.addr_text,
+        resolved_map: resolved.map,
         threads: start.threads,
         created_at_ms: now_ms(),
         status: "running".to_string(),
@@ -257,6 +290,140 @@ async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+async fn list_processes(Query(query): Query<ProcessesQuery>) -> impl IntoResponse {
+    match read_processes(query) {
+        Ok(processes) => Json(processes).into_response(),
+        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+async fn list_maps(State(state): State<AppState>, Path(pid): Path<u32>) -> impl IntoResponse {
+    match state.inner.maps.list(pid) {
+        Ok(maps) => Json(maps).into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+    }
+}
+
+async fn resolve_address(
+    State(state): State<AppState>,
+    Path(pid): Path<u32>,
+    Query(query): Query<ResolveQuery>,
+) -> impl IntoResponse {
+    match state.inner.maps.resolve_expression(pid, &query.addr) {
+        Ok(resolved) => Json(resolved).into_response(),
+        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+    }
+}
+
+fn read_processes(query: ProcessesQuery) -> anyhow::Result<Vec<ProcessView>> {
+    let needle = query.q.map(|q| q.to_ascii_lowercase());
+    let limit = query.limit.unwrap_or(4096).min(4096);
+    let mut processes = Vec::new();
+
+    for entry in fs::read_dir("/proc")? {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = file_name.parse::<u32>() else {
+            continue;
+        };
+        let Some(process) = read_process(pid) else {
+            continue;
+        };
+        if let Some(needle) = &needle {
+            if !process_matches(&process, needle) {
+                continue;
+            }
+        }
+        processes.push(process);
+    }
+
+    processes.sort_by_key(|process| process.pid);
+    if processes.len() > limit {
+        processes.truncate(limit);
+    }
+    Ok(processes)
+}
+
+fn read_process(pid: u32) -> Option<ProcessView> {
+    let proc_dir = PathBuf::from(format!("/proc/{pid}"));
+    let status = fs::read_to_string(proc_dir.join("status")).ok();
+    let comm = fs::read_to_string(proc_dir.join("comm"))
+        .ok()
+        .map(|comm| comm.trim().to_string())
+        .filter(|comm| !comm.is_empty())
+        .or_else(|| status.as_deref().and_then(status_name))
+        .unwrap_or_else(|| pid.to_string());
+    let cmdline = fs::read(proc_dir.join("cmdline"))
+        .ok()
+        .map(parse_cmdline)
+        .unwrap_or_default();
+    let exe = fs::read_link(proc_dir.join("exe"))
+        .ok()
+        .map(|path| path.display().to_string());
+    let ppid = status.as_deref().and_then(status_u32("PPid"));
+    let state = status.as_deref().and_then(status_string("State"));
+
+    Some(ProcessView {
+        pid,
+        ppid,
+        state,
+        comm,
+        cmdline,
+        exe,
+    })
+}
+
+fn parse_cmdline(bytes: Vec<u8>) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect()
+}
+
+fn status_name(status: &str) -> Option<String> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Name:"))
+        .map(|value| value.trim().to_string())
+}
+
+fn status_u32(key: &'static str) -> impl Fn(&str) -> Option<u32> {
+    move |status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}:")))
+            .and_then(|value| value.trim().parse().ok())
+    }
+}
+
+fn status_string(key: &'static str) -> impl Fn(&str) -> Option<String> {
+    move |status| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{key}:")))
+            .map(|value| value.trim().to_string())
+    }
+}
+
+fn process_matches(process: &ProcessView, needle: &str) -> bool {
+    process.pid.to_string().contains(needle)
+        || process.comm.to_ascii_lowercase().contains(needle)
+        || process
+            .cmdline
+            .iter()
+            .any(|arg| arg.to_ascii_lowercase().contains(needle))
+        || process
+            .exe
+            .as_deref()
+            .is_some_and(|exe| exe.to_ascii_lowercase().contains(needle))
 }
 
 impl AppState {
