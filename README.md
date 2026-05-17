@@ -27,10 +27,26 @@ Arguments:
 
 Options:
       --buf-size <BUF_SIZE>  buffer size, in power of 2. For example, 2 means 2^2 pages = 4 * 4096 bytes [default: 0]
+      --timeout <TIMEOUT>    exit after this many seconds. 0 means no timeout [default: 0]
+      --filter <FILTER>      register filter for hits, pcap-like. For example: 'ip == 0x1234 and ax != 0'
   -t                         whether the target is a thread or a process
   -b, --backtrace            whether to print backtrace
   -h, --help                 Print help
 ```
+
+## Filter
+
+`--filter` drops hits before printing them. It supports register comparisons joined with `and`/`or` or `&&`/`||`.
+
+Examples:
+
+```bash
+pwatch --filter 'ip == 0x55fa689a90' 31737 x 0x55fa689a90
+pwatch --filter 'ax != 0 and flags & 0x40 == 0' 31737 rw4 0x55fa689a90
+pwatch --filter 'pc >= 0x7000000000 && pc < 0x7100000000' 31737 rw4 0x55fa689a90
+```
+
+Use the register names printed by pwatch, such as `ax`/`ip` on x86_64 or `x0`/`pc` on aarch64.
 
 ## Output
 

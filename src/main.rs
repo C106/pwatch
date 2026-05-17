@@ -1,13 +1,24 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use colored::Colorize;
 use log::error;
-use perf::{PerfMap, SampleData};
-use perf_event_open_sys as sys;
+use perf::SampleData;
+use std::{net::SocketAddr, time::Duration};
+use watch::WatchConfig;
+
 mod arch;
+mod filter;
+mod hit;
+mod maps;
 mod perf;
+mod server;
+mod watch;
 
 #[derive(Parser)]
+#[command(author, version, about)]
 struct Args {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     #[arg(long, default_value = "0")]
     /// buffer size, in power of 2. For example, 2 means 2^2 pages = 4 * 4096 bytes.
     buf_size: usize,
@@ -17,105 +28,148 @@ struct Args {
     #[arg(short, long)]
     /// whether to print backtrace.
     backtrace: bool,
+    #[arg(long, default_value = "0")]
+    /// exit after this many seconds. 0 means no timeout.
+    timeout: u64,
+    #[arg(long)]
+    /// register filter for hits, pcap-like. For example: 'ip == 0x1234 and ax != 0'.
+    filter: Option<String>,
+
     /// target pid, if thread is true, this is the tid of the target thread.
-    pid: u32,
+    pid: Option<u32>,
     /// watchpoint type, can be read(r), write(w), readwrite(rw) or execve(x).
     /// if it is one of r, w, rw, the watchpoint length is needed. Valid length is 1, 2, 4, 8.
     /// For example, r4 means a read watchpoint with length 4 and rw1 means a readwrite watchpoint with length 1.
+    r#type: Option<String>,
+    /// watchpoint address, in hex format. 0x prefix is optional.
+    addr: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Install a hardware breakpoint/watchpoint and print hits.
+    Watch(WatchCommand),
+    /// Start the HTTP API server.
+    Serve(ServeCommand),
+}
+
+#[derive(Parser)]
+struct WatchCommand {
+    #[arg(long, default_value = "0")]
+    /// buffer size, in power of 2. For example, 2 means 2^2 pages = 4 * 4096 bytes.
+    buf_size: usize,
+    #[arg(short)]
+    /// whether the target is a thread or a process.
+    thread: bool,
+    #[arg(short, long)]
+    /// whether to print backtrace.
+    backtrace: bool,
+    #[arg(long, default_value = "0")]
+    /// exit after this many seconds. 0 means no timeout.
+    timeout: u64,
+    #[arg(long)]
+    /// register filter for hits, pcap-like. For example: 'ip == 0x1234 and ax != 0'.
+    filter: Option<String>,
+    /// target pid, if thread is true, this is the tid of the target thread.
+    pid: u32,
+    /// watchpoint type.
     r#type: String,
     /// watchpoint address, in hex format. 0x prefix is optional.
     addr: String,
 }
 
-fn parse_len(s: &str) -> Option<u32> {
-    match s {
-        "1" => Some(sys::bindings::HW_BREAKPOINT_LEN_1),
-        "2" => Some(sys::bindings::HW_BREAKPOINT_LEN_2),
-        "4" => Some(sys::bindings::HW_BREAKPOINT_LEN_4),
-        "8" => Some(sys::bindings::HW_BREAKPOINT_LEN_8),
-        "" => Some(sys::bindings::HW_BREAKPOINT_LEN_1),
-        _ => None,
+#[derive(Parser)]
+struct ServeCommand {
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    /// listen address for the HTTP API.
+    listen: SocketAddr,
+    #[arg(long, default_value = "1024")]
+    /// number of recent hits retained for GET /hits.
+    hit_buffer: usize,
+}
+
+impl Args {
+    fn into_mode(self) -> anyhow::Result<Mode> {
+        match self.command {
+            Some(Command::Serve(command)) => Ok(Mode::Serve(command)),
+            Some(Command::Watch(command)) => Ok(Mode::Watch(command)),
+            None => Ok(Mode::Watch(WatchCommand {
+                buf_size: self.buf_size,
+                thread: self.thread,
+                backtrace: self.backtrace,
+                timeout: self.timeout,
+                filter: self.filter,
+                pid: self
+                    .pid
+                    .ok_or_else(|| anyhow::anyhow!("missing required argument: <PID>"))?,
+                r#type: self
+                    .r#type
+                    .ok_or_else(|| anyhow::anyhow!("missing required argument: <TYPE>"))?,
+                addr: self
+                    .addr
+                    .ok_or_else(|| anyhow::anyhow!("missing required argument: <ADDR>"))?,
+            })),
+        }
     }
 }
 
-fn parse_watchpoint_type(s: &str) -> Option<(u32, u32)> {
-    if let Some(s) = s.strip_prefix("rw") {
-        let len = parse_len(s)?;
-        Some((sys::bindings::HW_BREAKPOINT_RW, len))
-    } else if let Some(s) = s.strip_prefix('r') {
-        let len = parse_len(s)?;
-        Some((sys::bindings::HW_BREAKPOINT_R, len))
-    } else if let Some(s) = s.strip_prefix('w') {
-        let len = parse_len(s)?;
-        Some((sys::bindings::HW_BREAKPOINT_W, len))
-    } else if s == "x" {
-        Some((
-            sys::bindings::HW_BREAKPOINT_X,
-            std::mem::size_of::<nix::libc::c_long>() as u32,
-        ))
-    } else {
-        None
-    }
-}
-
-fn parse_addr(s: &str) -> Option<u64> {
-    u64::from_str_radix(s.strip_prefix("0x").unwrap_or(s), 16).ok()
+enum Mode {
+    Watch(WatchCommand),
+    Serve(ServeCommand),
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
-    let args = Args::parse();
-
-    let (ty, bp_len) = parse_watchpoint_type(&args.r#type)
-        .ok_or_else(|| anyhow::anyhow!(format!("invalid watchpoint type: {}", args.r#type)))?;
-    let addr = parse_addr(&args.addr)
-        .ok_or_else(|| anyhow::anyhow!(format!("invalid address: {}", args.addr)))?;
-    let maps = if !args.thread {
-        procfs::process::Process::new(args.pid as i32)?
-            .tasks()?
-            .filter_map(Result::ok)
-            .map(|t| {
-                PerfMap::new(
-                    ty,
-                    addr,
-                    bp_len as u64,
-                    t.tid,
-                    args.buf_size,
-                    args.backtrace,
-                )
+    match Args::parse().into_mode()? {
+        Mode::Watch(command) => run_watch(command).await,
+        Mode::Serve(command) => {
+            server::serve(server::ServerConfig {
+                listen: command.listen,
+                hit_buffer: command.hit_buffer,
             })
-            .filter_map(|r| match r {
-                Ok(m) => Some(m),
-                Err(e) => {
-                    error!("perf_map_open error: {}", e);
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    } else {
-        vec![PerfMap::new(
-            ty,
-            addr,
-            bp_len as u64,
-            args.pid as i32,
-            args.buf_size,
-            args.backtrace,
-        )?]
-    };
-    if maps.is_empty() {
-        error!("no valid perf map");
-        return Ok(());
+            .await
+        }
     }
-    let (res, _, _) = futures::future::select_all(maps.into_iter().map(|m| {
-        tokio::spawn(async move {
-            if let Err(e) = m.events(handle_event).await {
-                error!("error: {}", e);
-            }
-        })
-    }))
-    .await;
-    res?;
+}
+
+async fn run_watch(command: WatchCommand) -> anyhow::Result<()> {
+    let (ty, bp_len) = watch::parse_watchpoint_type(&command.r#type)
+        .ok_or_else(|| anyhow::anyhow!(format!("invalid watchpoint type: {}", command.r#type)))?;
+    let addr = watch::parse_addr(&command.addr)
+        .ok_or_else(|| anyhow::anyhow!(format!("invalid address: {}", command.addr)))?;
+    let filter = command
+        .filter
+        .as_deref()
+        .map(filter::RegFilter::parse)
+        .transpose()?;
+    let config = WatchConfig {
+        pid: command.pid,
+        thread: command.thread,
+        type_name: command.r#type,
+        addr_text: command.addr,
+        ty,
+        addr,
+        len: bp_len as u64,
+        backtrace: command.backtrace,
+        buf_size: command.buf_size,
+        filter,
+    };
+    let (_, running) = match watch::start_watch(config, handle_event) {
+        Ok(watch) => watch,
+        Err(e) if e.to_string() == "no valid perf map" => {
+            error!("no valid perf map");
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+
+    if command.timeout == 0 {
+        futures::future::pending::<()>().await;
+    } else {
+        tokio::time::sleep(Duration::from_secs(command.timeout)).await;
+        running.stop();
+    }
     Ok(())
 }
 
