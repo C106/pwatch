@@ -12,6 +12,7 @@ use tokio::io::unix::AsyncFd;
 const PERF_SAMPLE_TID: u64 = sys::bindings::PERF_SAMPLE_TID as u64;
 const PERF_SAMPLE_CALLCHAIN: u64 = sys::bindings::PERF_SAMPLE_CALLCHAIN as u64;
 const PERF_SAMPLE_REGS_USER: u64 = sys::bindings::PERF_SAMPLE_REGS_USER as u64;
+const MAX_EVENTS_PER_READINESS: usize = 128;
 
 pub struct PerfMap {
     mmap_addr: usize,
@@ -101,8 +102,11 @@ impl PerfMap {
         let data_size = mmap_page_metadata.data_size as usize;
         let mut read_data_size = 0u64;
         loop {
-            let guard = self.fd.readable().await?;
-            while mmap_page_metadata.data_head != read_data_size {
+            let mut guard = self.fd.readable().await?;
+            let mut processed = 0usize;
+            while mmap_page_metadata.data_head != read_data_size
+                && processed < MAX_EVENTS_PER_READINESS
+            {
                 let mut reader = RingReader {
                     data_addr,
                     data_size,
@@ -118,14 +122,21 @@ impl PerfMap {
                 } else if data_header.type_ == sys::bindings::PERF_RECORD_LOST {
                     reader.offset = std::mem::size_of::<sys::bindings::perf_event_header>();
                     let lost = reader.read_u64();
-                    warn!("Lost {} events", lost);
+                    debug!("Lost {} events", lost);
                 } else {
-                    warn!("Unknown type");
+                    debug!("Unknown perf record type: {}", data_header.type_);
                 }
                 read_data_size += data_header.size as u64;
                 mmap_page_metadata.data_tail = read_data_size;
+                processed += 1;
+            }
+            if mmap_page_metadata.data_head == read_data_size {
+                guard.clear_ready();
             }
             drop(guard);
+            if processed == MAX_EVENTS_PER_READINESS {
+                tokio::task::yield_now().await;
+            }
         }
     }
 

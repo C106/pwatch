@@ -61,6 +61,25 @@ impl MapsCache {
         self.resolve_cached(pid, addr, now, true)
     }
 
+    pub fn resolve_many(&self, pid: u32, addrs: &[u64]) -> Vec<Option<MapRegion>> {
+        if addrs.is_empty() {
+            return Vec::new();
+        }
+        let now = Instant::now();
+        let regions = self.regions_with(now, pid, false).unwrap_or_default();
+        let mut resolved = resolve_against_regions(&regions, addrs);
+        if resolved.iter().any(Option::is_none) {
+            if let Ok(refreshed) = self.regions_with(now, pid, true) {
+                for (idx, value) in resolved.iter_mut().enumerate() {
+                    if value.is_none() {
+                        *value = resolve_one(&refreshed, addrs[idx]);
+                    }
+                }
+            }
+        }
+        resolved
+    }
+
     pub fn resolve_expression(&self, pid: u32, expression: &str) -> anyhow::Result<ResolvedAddress> {
         let addr = if let Some(addr) = parse_numeric_addr(expression.trim()) {
             addr
@@ -142,6 +161,20 @@ impl MapsCache {
             .map(|cached| cached.regions.clone())
             .unwrap_or_default())
     }
+}
+
+fn resolve_against_regions(regions: &[ParsedRegion], addrs: &[u64]) -> Vec<Option<MapRegion>> {
+    addrs
+        .iter()
+        .map(|addr| resolve_one(regions, *addr))
+        .collect()
+}
+
+fn resolve_one(regions: &[ParsedRegion], addr: u64) -> Option<MapRegion> {
+    regions
+        .iter()
+        .find(|region| region.start <= addr && addr < region.end)
+        .map(|region| region.region.clone())
 }
 
 fn read_maps(pid: u32) -> anyhow::Result<Vec<ParsedRegion>> {

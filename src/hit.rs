@@ -27,10 +27,12 @@ pub struct HitFactory {
 }
 
 impl HitFactory {
-    pub fn make_hit<F>(&self, breakpoint_id: u64, data: SampleData, mut resolve_map: F) -> Hit
-    where
-        F: FnMut(u64) -> Option<MapRegion>,
-    {
+    pub fn make_hit_with_maps(
+        &self,
+        breakpoint_id: u64,
+        data: SampleData,
+        maps: Vec<Option<MapRegion>>,
+    ) -> Hit {
         let seq = self.next_seq.fetch_add(1, Ordering::Relaxed) + 1;
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -43,7 +45,7 @@ impl HitFactory {
             .map(|(idx, value)| RegisterValue {
                 name: arch::id_to_str(idx),
                 value: format!("0x{value:016x}"),
-                map: resolve_map(*value),
+                map: maps.get(idx).cloned().unwrap_or(None),
             })
             .collect();
         let backtrace = data.backtrace.map(|frames| {

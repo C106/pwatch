@@ -1,6 +1,7 @@
 use crate::{
     hit::{Hit, HitFactory},
     maps::{MapRegion, MapsCache},
+    perf::SampleData,
     watch::{self, RunningWatch, WatchConfig},
 };
 use axum::{
@@ -33,8 +34,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use futures::{stream, StreamExt};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
+
+const SAMPLE_QUEUE_CAPACITY: usize = 4096;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -55,11 +58,19 @@ struct InnerState {
     hit_buffer_limit: usize,
     breakpoints: Mutex<HashMap<u64, BreakpointEntry>>,
     hit_tx: broadcast::Sender<Hit>,
+    sample_tx: mpsc::Sender<QueuedSample>,
+    dropped_samples: AtomicU64,
 }
 
 struct BreakpointEntry {
     view: BreakpointView,
     watch: RunningWatch,
+}
+
+struct QueuedSample {
+    breakpoint_id: u64,
+    pid: u32,
+    data: SampleData,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -122,6 +133,7 @@ struct ErrorBody {
 
 pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
     let (hit_tx, _) = broadcast::channel(1024);
+    let (sample_tx, sample_rx) = mpsc::channel(SAMPLE_QUEUE_CAPACITY);
     let state = AppState {
         inner: Arc::new(InnerState {
             next_breakpoint_id: AtomicU64::new(1),
@@ -131,8 +143,11 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
             hit_buffer_limit: config.hit_buffer,
             breakpoints: Mutex::new(HashMap::new()),
             hit_tx,
+            sample_tx,
+            dropped_samples: AtomicU64::new(0),
         }),
     };
+    spawn_hit_worker(state.clone(), sample_rx);
 
     let app = Router::new()
         .route("/breakpoints", post(create_breakpoint).get(list_breakpoints))
@@ -193,12 +208,20 @@ fn create_breakpoint_inner(
         filter,
     };
 
-    let emit_state = state.clone();
+    let sample_tx = state.inner.sample_tx.clone();
+    let inner = Arc::clone(&state.inner);
+    let sample_pid = config.pid;
     let (start, watch) = watch::start_watch(config.clone(), move |data| {
-        let hit = emit_state.inner.hit_factory.make_hit(id, data, |addr| {
-            emit_state.inner.maps.resolve(config.pid, addr)
-        });
-        emit_state.push_hit(hit);
+        if sample_tx
+            .try_send(QueuedSample {
+                breakpoint_id: id,
+                pid: sample_pid,
+                data,
+            })
+            .is_err()
+        {
+            inner.dropped_samples.fetch_add(1, Ordering::Relaxed);
+        }
     })?;
 
     let view = BreakpointView {
@@ -442,6 +465,25 @@ impl AppState {
         }
         let _ = self.inner.hit_tx.send(hit);
     }
+}
+
+fn spawn_hit_worker(state: AppState, mut sample_rx: mpsc::Receiver<QueuedSample>) {
+    tokio::spawn(async move {
+        let mut processed = 0usize;
+        while let Some(sample) = sample_rx.recv().await {
+            let maps = state.inner.maps.resolve_many(sample.pid, &sample.data.regs);
+            let hit = state.inner.hit_factory.make_hit_with_maps(
+                sample.breakpoint_id,
+                sample.data,
+                maps,
+            );
+            state.push_hit(hit);
+            processed += 1;
+            if processed % 128 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+    });
 }
 
 fn now_ms() -> u128 {

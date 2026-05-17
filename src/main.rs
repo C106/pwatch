@@ -118,7 +118,7 @@ enum Mode {
     Serve(ServeCommand),
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
     match Args::parse().into_mode()? {
