@@ -136,8 +136,8 @@ async function loadHits() {
 async function loadProcesses() {
   const query = els.processSearch.value.trim();
   const suffix = query
-    ? `?limit=256&q=${encodeURIComponent(query)}`
-    : "?limit=256";
+    ? `?limit=4096&q=${encodeURIComponent(query)}`
+    : "?limit=4096";
   state.processes = await api(`/processes${suffix}`);
   renderProcesses();
 }
