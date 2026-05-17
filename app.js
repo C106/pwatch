@@ -3,6 +3,7 @@ const state = {
   eventSource: null,
   breakpoints: [],
   hits: [],
+  processes: [],
 };
 
 const els = {
@@ -17,6 +18,10 @@ const els = {
   backtrace: document.querySelector("#backtrace"),
   bufSize: document.querySelector("#bufSize"),
   filter: document.querySelector("#filter"),
+  processRefreshBtn: document.querySelector("#processRefreshBtn"),
+  processSearch: document.querySelector("#processSearch"),
+  processCount: document.querySelector("#processCount"),
+  processList: document.querySelector("#processList"),
   breakpointCount: document.querySelector("#breakpointCount"),
   breakpointsBody: document.querySelector("#breakpointsBody"),
   hitLimit: document.querySelector("#hitLimit"),
@@ -31,6 +36,8 @@ els.apiBase.value = state.apiBase;
 
 els.connectBtn.addEventListener("click", connect);
 els.refreshBtn.addEventListener("click", refreshAll);
+els.processRefreshBtn.addEventListener("click", loadProcesses);
+els.processSearch.addEventListener("input", debounce(loadProcesses, 250));
 els.clearHitsBtn.addEventListener("click", () => {
   state.hits = [];
   renderHits();
@@ -40,6 +47,7 @@ els.form.addEventListener("submit", createBreakpoint);
 
 renderBreakpoints();
 renderHits();
+renderProcesses();
 connect();
 
 function apiUrl(path) {
@@ -92,7 +100,7 @@ async function connect() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadBreakpoints(), loadHits()]);
+  await Promise.all([loadBreakpoints(), loadHits(), loadProcesses()]);
 }
 
 async function loadBreakpoints() {
@@ -104,6 +112,15 @@ async function loadHits() {
   const limit = Number(els.hitLimit.value || 100);
   state.hits = await api(`/hits?limit=${encodeURIComponent(limit)}`);
   renderHits();
+}
+
+async function loadProcesses() {
+  const query = els.processSearch.value.trim();
+  const suffix = query
+    ? `?limit=256&q=${encodeURIComponent(query)}`
+    : "?limit=256";
+  state.processes = await api(`/processes${suffix}`);
+  renderProcesses();
 }
 
 async function createBreakpoint(event) {
@@ -205,6 +222,47 @@ function renderBreakpoints() {
   }
 }
 
+function renderProcesses() {
+  els.processCount.textContent = `${state.processes.length} processes`;
+  els.processList.replaceChildren();
+
+  if (state.processes.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "process-empty";
+    empty.textContent = "No processes";
+    els.processList.append(empty);
+    return;
+  }
+
+  for (const process of state.processes) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "process-item";
+    item.addEventListener("click", () => {
+      els.pid.value = process.pid;
+      els.addr.focus();
+    });
+
+    const title = document.createElement("div");
+    title.className = "process-title";
+    const name = document.createElement("strong");
+    name.textContent = process.comm || process.pid;
+    const pid = document.createElement("code");
+    pid.textContent = String(process.pid);
+    title.append(name, pid);
+
+    const meta = document.createElement("div");
+    meta.className = "process-meta";
+    const command = process.cmdline?.length
+      ? process.cmdline.join(" ")
+      : process.exe || process.state || "";
+    meta.textContent = command || "kernel thread";
+
+    item.append(title, meta);
+    els.processList.append(item);
+  }
+}
+
 function renderHits() {
   els.hitCount.textContent = `${state.hits.length} events`;
   els.hitsList.replaceChildren();
@@ -301,4 +359,14 @@ function showError(message) {
   toast.textContent = message;
   document.body.append(toast);
   window.setTimeout(() => toast.remove(), 5000);
+}
+
+function debounce(fn, delayMs) {
+  let timer = 0;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args).catch((error) => {
+      showError(error.message);
+    }), delayMs);
+  };
 }

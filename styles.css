@@ -58,6 +58,12 @@ button.secondary {
   color: var(--text);
 }
 
+button.compact {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 button.danger {
   background: rgba(227, 93, 93, 0.15);
   color: #ffb3b3;
@@ -156,6 +162,18 @@ label {
   font-size: 14px;
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.panel-title-row h2 {
+  margin: 0;
+}
+
 .panel form {
   display: grid;
   gap: 12px;
@@ -202,6 +220,83 @@ label {
 
 .status {
   margin-top: 12px;
+}
+
+.process-panel {
+  margin-bottom: 0;
+}
+
+.subtle-count {
+  margin: 10px 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.process-list {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.process-item {
+  display: grid;
+  width: 100%;
+  height: auto;
+  min-height: 54px;
+  gap: 4px;
+  border: 1px solid #252b33;
+  border-radius: 6px;
+  background: #111418;
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.process-item:hover {
+  border-color: rgba(77, 157, 224, 0.65);
+  filter: none;
+}
+
+.process-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.process-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.process-title code {
+  color: #a9d7ff;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.process-meta,
+.process-empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.process-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-empty {
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  padding: 14px;
+  text-align: center;
 }
 
 .connected {

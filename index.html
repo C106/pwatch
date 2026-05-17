@@ -76,6 +76,19 @@
             <button type="submit">Create</button>
           </form>
         </section>
+
+        <section class="panel process-panel">
+          <div class="panel-title-row">
+            <h2>Processes</h2>
+            <button id="processRefreshBtn" class="secondary compact" type="button">Refresh</button>
+          </div>
+          <label>
+            Search
+            <input id="processSearch" type="search" spellcheck="false" placeholder="pid, name, command">
+          </label>
+          <div id="processCount" class="subtle-count">0 processes</div>
+          <div id="processList" class="process-list"></div>
+        </section>
       </aside>
 
       <main class="workspace">
