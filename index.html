@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>pwatch Dashboard</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">pw</div>
+          <div>
+            <h1>pwatch</h1>
+            <p>watchpoint control</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <h2>API</h2>
+          <label>
+            Endpoint
+            <input id="apiBase" type="url" spellcheck="false">
+          </label>
+          <div class="button-row">
+            <button id="connectBtn" type="button">Connect</button>
+            <button id="refreshBtn" class="secondary" type="button">Refresh</button>
+          </div>
+          <div id="status" class="status disconnected">Disconnected</div>
+        </section>
+
+        <section class="panel">
+          <h2>Create Breakpoint</h2>
+          <form id="breakpointForm">
+            <label>
+              PID
+              <input id="pid" type="number" min="1" required placeholder="31737">
+            </label>
+            <div class="field-grid">
+              <label>
+                Type
+                <select id="type">
+                  <option value="rw1">rw1</option>
+                  <option value="rw2">rw2</option>
+                  <option value="rw4" selected>rw4</option>
+                  <option value="rw8">rw8</option>
+                  <option value="r1">r1</option>
+                  <option value="r2">r2</option>
+                  <option value="r4">r4</option>
+                  <option value="r8">r8</option>
+                  <option value="w1">w1</option>
+                  <option value="w2">w2</option>
+                  <option value="w4">w4</option>
+                  <option value="w8">w8</option>
+                  <option value="x">x</option>
+                </select>
+              </label>
+              <label>
+                Buffer
+                <input id="bufSize" type="number" min="0" max="16" value="0">
+              </label>
+            </div>
+            <label>
+              Address
+              <input id="addr" type="text" spellcheck="false" required placeholder="0x55fa689a90">
+            </label>
+            <label>
+              Filter
+              <input id="filter" type="text" spellcheck="false" placeholder="ip == 0x1234 and ax != 0">
+            </label>
+            <label class="checkbox">
+              <input id="backtrace" type="checkbox">
+              <span>Backtrace</span>
+            </label>
+            <button type="submit">Create</button>
+          </form>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <section class="toolbar">
+          <div>
+            <h2>Breakpoints</h2>
+            <p id="breakpointCount">0 running</p>
+          </div>
+          <div class="toolbar-actions">
+            <label>
+              Hit limit
+              <input id="hitLimit" type="number" min="1" max="1000" value="100">
+            </label>
+            <button id="clearHitsBtn" class="secondary" type="button">Clear View</button>
+          </div>
+        </section>
+
+        <section class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>PID</th>
+                <th>Type</th>
+                <th>Address</th>
+                <th>Threads</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="breakpointsBody"></tbody>
+          </table>
+        </section>
+
+        <section class="hits-header">
+          <div>
+            <h2>Hits</h2>
+            <p id="hitCount">0 events</p>
+          </div>
+          <div id="streamState" class="pill">SSE idle</div>
+        </section>
+
+        <section id="hitsList" class="hits-list"></section>
+      </main>
+    </div>
+
+    <template id="emptyTemplate">
+      <div class="empty">
+        <strong>No data</strong>
+        <span>Connect to a pwatch API endpoint to start.</span>
+      </div>
+    </template>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
