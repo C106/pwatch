@@ -63,7 +63,7 @@
             </div>
             <label>
               Address
-              <input id="addr" type="text" spellcheck="false" required placeholder="0x55fa689a90">
+              <input id="addr" type="text" spellcheck="false" required placeholder="0x55fa689a90 or libUE4.so + 0x1234">
             </label>
             <label>
               Filter
@@ -92,46 +92,92 @@
       </aside>
 
       <main class="workspace">
-        <section class="toolbar">
-          <div>
-            <h2>Breakpoints</h2>
-            <p id="breakpointCount">0 running</p>
-          </div>
-          <div class="toolbar-actions">
-            <label>
-              Hit limit
-              <input id="hitLimit" type="number" min="1" max="1000" value="100">
-            </label>
-            <button id="clearHitsBtn" class="secondary" type="button">Clear View</button>
-          </div>
+        <section class="tabs" role="tablist">
+          <button class="tab active" type="button" data-tab="breakpoints">Breakpoints</button>
+          <button class="tab" type="button" data-tab="hits">Hits</button>
+          <button class="tab" type="button" data-tab="maps">Maps</button>
         </section>
 
-        <section class="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>PID</th>
-                <th>Type</th>
-                <th>Address</th>
-                <th>Threads</th>
-                <th>Status</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody id="breakpointsBody"></tbody>
-          </table>
-        </section>
-
-        <section class="hits-header">
-          <div>
-            <h2>Hits</h2>
-            <p id="hitCount">0 events</p>
+        <section id="breakpointsTab" class="tab-panel active">
+          <div class="toolbar">
+            <div>
+              <h2>Breakpoints</h2>
+              <p id="breakpointCount">0 running</p>
+            </div>
           </div>
-          <div id="streamState" class="pill">SSE idle</div>
+
+          <section class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>PID</th>
+                  <th>Type</th>
+                  <th>Input</th>
+                  <th>Resolved</th>
+                  <th>Threads</th>
+                  <th>Status</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="breakpointsBody"></tbody>
+            </table>
+          </section>
         </section>
 
-        <section id="hitsList" class="hits-list"></section>
+        <section id="hitsTab" class="tab-panel">
+          <div class="hits-header">
+            <div>
+              <h2>Hits</h2>
+              <p id="hitCount">0 events</p>
+            </div>
+            <div class="toolbar-actions">
+              <label>
+                Hit limit
+                <input id="hitLimit" type="number" min="1" max="1000" value="100">
+              </label>
+              <button id="clearHitsBtn" class="secondary" type="button">Clear View</button>
+              <div id="streamState" class="pill">SSE idle</div>
+            </div>
+          </div>
+
+          <section id="hitsList" class="hits-list"></section>
+        </section>
+
+        <section id="mapsTab" class="tab-panel">
+          <div class="toolbar">
+            <div>
+              <h2>Maps</h2>
+              <p id="mapsCount">0 regions</p>
+            </div>
+            <div class="toolbar-actions">
+              <label>
+                PID
+                <input id="mapsPid" type="number" min="1" placeholder="Select process">
+              </label>
+              <label>
+                Search
+                <input id="mapsSearch" type="search" spellcheck="false" placeholder="libUE4, /data/app, rw-p">
+              </label>
+              <button id="mapsRefreshBtn" class="secondary" type="button">Refresh</button>
+            </div>
+          </div>
+
+          <section class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Start</th>
+                  <th>End</th>
+                  <th>Perms</th>
+                  <th>Offset</th>
+                  <th>Path</th>
+                </tr>
+              </thead>
+              <tbody id="mapsBody"></tbody>
+            </table>
+          </section>
+        </section>
       </main>
     </div>
 

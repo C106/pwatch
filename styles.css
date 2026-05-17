@@ -335,7 +335,44 @@ label {
 }
 
 .toolbar-actions label {
-  width: 110px;
+  width: 150px;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 18px;
+}
+
+.tab {
+  height: 38px;
+  border-radius: 6px 6px 0 0;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 0 14px;
+}
+
+.tab:hover {
+  filter: none;
+  color: var(--text);
+}
+
+.tab.active {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
 }
 
 .table-wrap {

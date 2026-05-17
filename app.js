@@ -4,6 +4,8 @@ const state = {
   breakpoints: [],
   hits: [],
   processes: [],
+  maps: [],
+  activeTab: "breakpoints",
 };
 
 const els = {
@@ -22,6 +24,8 @@ const els = {
   processSearch: document.querySelector("#processSearch"),
   processCount: document.querySelector("#processCount"),
   processList: document.querySelector("#processList"),
+  tabs: document.querySelectorAll(".tab"),
+  tabPanels: document.querySelectorAll(".tab-panel"),
   breakpointCount: document.querySelector("#breakpointCount"),
   breakpointsBody: document.querySelector("#breakpointsBody"),
   hitLimit: document.querySelector("#hitLimit"),
@@ -29,6 +33,11 @@ const els = {
   hitsList: document.querySelector("#hitsList"),
   streamState: document.querySelector("#streamState"),
   clearHitsBtn: document.querySelector("#clearHitsBtn"),
+  mapsPid: document.querySelector("#mapsPid"),
+  mapsSearch: document.querySelector("#mapsSearch"),
+  mapsRefreshBtn: document.querySelector("#mapsRefreshBtn"),
+  mapsCount: document.querySelector("#mapsCount"),
+  mapsBody: document.querySelector("#mapsBody"),
   emptyTemplate: document.querySelector("#emptyTemplate"),
 };
 
@@ -38,6 +47,12 @@ els.connectBtn.addEventListener("click", connect);
 els.refreshBtn.addEventListener("click", refreshAll);
 els.processRefreshBtn.addEventListener("click", loadProcesses);
 els.processSearch.addEventListener("input", debounce(loadProcesses, 250));
+els.tabs.forEach((tab) => {
+  tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
+});
+els.mapsRefreshBtn.addEventListener("click", loadMaps);
+els.mapsSearch.addEventListener("input", renderMaps);
+els.mapsPid.addEventListener("change", loadMaps);
 els.clearHitsBtn.addEventListener("click", () => {
   state.hits = [];
   renderHits();
@@ -48,6 +63,7 @@ els.form.addEventListener("submit", createBreakpoint);
 renderBreakpoints();
 renderHits();
 renderProcesses();
+renderMaps();
 connect();
 
 function apiUrl(path) {
@@ -101,6 +117,9 @@ async function connect() {
 
 async function refreshAll() {
   await Promise.all([loadBreakpoints(), loadHits(), loadProcesses()]);
+  if (els.mapsPid.value) {
+    await loadMaps();
+  }
 }
 
 async function loadBreakpoints() {
@@ -121,6 +140,18 @@ async function loadProcesses() {
     : "?limit=256";
   state.processes = await api(`/processes${suffix}`);
   renderProcesses();
+}
+
+async function loadMaps() {
+  const pid = Number(els.mapsPid.value || els.pid.value || 0);
+  if (!pid) {
+    state.maps = [];
+    renderMaps();
+    return;
+  }
+  els.mapsPid.value = pid;
+  state.maps = await api(`/processes/${pid}/maps`);
+  renderMaps();
 }
 
 async function createBreakpoint(event) {
@@ -193,7 +224,7 @@ function renderBreakpoints() {
   if (state.breakpoints.length === 0) {
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 7;
+    cell.colSpan = 8;
     cell.textContent = "No breakpoints";
     row.append(cell);
     els.breakpointsBody.append(row);
@@ -207,6 +238,7 @@ function renderBreakpoints() {
       cell(breakpoint.pid),
       cell(breakpoint.type),
       codeCell(breakpoint.addr),
+      codeCell(breakpoint.resolved_addr || breakpoint.addr),
       cell(breakpoint.threads.join(", ")),
       cell(breakpoint.status),
     );
@@ -240,6 +272,8 @@ function renderProcesses() {
     item.className = "process-item";
     item.addEventListener("click", () => {
       els.pid.value = process.pid;
+      els.mapsPid.value = process.pid;
+      loadMaps().catch((error) => showError(error.message));
       els.addr.focus();
     });
 
@@ -261,6 +295,42 @@ function renderProcesses() {
     item.append(title, meta);
     els.processList.append(item);
   }
+}
+
+function renderMaps() {
+  const query = els.mapsSearch.value.trim().toLowerCase();
+  const maps = query
+    ? state.maps.filter((map) => mapMatches(map, query))
+    : state.maps;
+  els.mapsCount.textContent = `${maps.length} regions`;
+  els.mapsBody.replaceChildren();
+
+  if (maps.length === 0) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = els.mapsPid.value ? "No maps" : "Select a process";
+    row.append(cell);
+    els.mapsBody.append(row);
+    return;
+  }
+
+  for (const map of maps) {
+    const row = document.createElement("tr");
+    row.append(
+      codeCell(map.start),
+      codeCell(map.end),
+      cell(map.perms),
+      codeCell(map.offset),
+      cell(map.pathname || "[anonymous]"),
+    );
+    els.mapsBody.append(row);
+  }
+}
+
+function mapMatches(map, query) {
+  return [map.start, map.end, map.perms, map.offset, map.dev, map.pathname || ""]
+    .some((value) => String(value).toLowerCase().includes(query));
 }
 
 function renderHits() {
@@ -318,14 +388,20 @@ function renderReg(reg) {
   value.textContent = reg.value;
   box.append(name, value);
 
-  if (reg.map) {
-    const map = document.createElement("div");
-    map.className = "map-path";
-    const path = reg.map.pathname || "[anonymous]";
-    map.textContent = `${path} ${reg.map.perms} ${reg.map.start}-${reg.map.end}`;
-    box.append(map);
-  }
   return box;
+}
+
+function setActiveTab(tabName) {
+  state.activeTab = tabName;
+  els.tabs.forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.tab === tabName);
+  });
+  els.tabPanels.forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `${tabName}Tab`);
+  });
+  if (tabName === "maps" && els.mapsPid.value && state.maps.length === 0) {
+    loadMaps().catch((error) => showError(error.message));
+  }
 }
 
 function cell(value) {
