@@ -18,6 +18,14 @@ pub struct MapRegion {
     pub pathname: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct AddressResolution {
+    pub region: MapRegion,
+    pub module: String,
+    pub offset: String,
+    pub display: String,
+}
+
 #[derive(Clone, Debug)]
 struct ParsedRegion {
     start: u64,
@@ -61,7 +69,11 @@ impl MapsCache {
         self.resolve_cached(pid, addr, now, true)
     }
 
-    pub fn resolve_many(&self, pid: u32, addrs: &[u64]) -> Vec<Option<MapRegion>> {
+    pub fn resolve_many_addresses(
+        &self,
+        pid: u32,
+        addrs: &[u64],
+    ) -> Vec<Option<AddressResolution>> {
         if addrs.is_empty() {
             return Vec::new();
         }
@@ -175,18 +187,45 @@ impl MapsCache {
     }
 }
 
-fn resolve_against_regions(regions: &[ParsedRegion], addrs: &[u64]) -> Vec<Option<MapRegion>> {
+fn resolve_against_regions(
+    regions: &[ParsedRegion],
+    addrs: &[u64],
+) -> Vec<Option<AddressResolution>> {
     addrs
         .iter()
         .map(|addr| resolve_one(regions, *addr))
         .collect()
 }
 
-fn resolve_one(regions: &[ParsedRegion], addr: u64) -> Option<MapRegion> {
+fn resolve_one(regions: &[ParsedRegion], addr: u64) -> Option<AddressResolution> {
     regions
         .iter()
         .find(|region| region.start <= addr && addr < region.end)
-        .map(|region| region.region.clone())
+        .map(|region| {
+            let offset = addr.saturating_sub(region.start);
+            let module = module_label(&region.region);
+            AddressResolution {
+                region: region.region.clone(),
+                module: module.clone(),
+                offset: format!("0x{offset:x}"),
+                display: format!("{module}+0x{offset:x}"),
+            }
+        })
+}
+
+fn module_label(region: &MapRegion) -> String {
+    region
+        .pathname
+        .as_deref()
+        .and_then(|path| {
+            Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+        })
+        .map(ToString::to_string)
+        .or_else(|| region.pathname.clone())
+        .unwrap_or_else(|| format!("{}-{}", region.start, region.end))
 }
 
 fn read_maps(pid: u32) -> anyhow::Result<Vec<ParsedRegion>> {

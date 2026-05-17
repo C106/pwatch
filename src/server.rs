@@ -479,12 +479,21 @@ fn spawn_hit_worker(state: AppState, mut sample_rx: mpsc::Receiver<QueuedSample>
     tokio::spawn(async move {
         let mut processed = 0usize;
         while let Some(sample) = sample_rx.recv().await {
-            let maps = state.inner.maps.resolve_many(sample.pid, &sample.data.regs);
-            let hit =
-                state
-                    .inner
-                    .hit_factory
-                    .make_hit_with_maps(sample.breakpoint_id, sample.data, maps);
+            let reg_resolutions = state
+                .inner
+                .maps
+                .resolve_many_addresses(sample.pid, &sample.data.regs);
+            let backtrace_resolutions = sample
+                .data
+                .backtrace
+                .as_ref()
+                .map(|frames| state.inner.maps.resolve_many_addresses(sample.pid, frames));
+            let hit = state.inner.hit_factory.make_hit_with_maps(
+                sample.breakpoint_id,
+                sample.data,
+                reg_resolutions,
+                backtrace_resolutions,
+            );
             state.push_hit(hit);
             processed += 1;
             if processed % 128 == 0 {

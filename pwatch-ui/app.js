@@ -494,10 +494,13 @@ function renderHits() {
     }
 
     card.append(top, regs);
-    if (hit.backtrace?.length) {
+    const backtrace = hit.backtrace_frames?.length
+      ? hit.backtrace_frames.map((frame) => frame.display || frame.value)
+      : hit.backtrace;
+    if (backtrace?.length) {
       const trace = document.createElement("div");
       trace.className = "map-path";
-      trace.textContent = `backtrace: ${hit.backtrace.join(" -> ")}`;
+      trace.textContent = `backtrace: ${backtrace.join(" -> ")}`;
       card.append(trace);
     }
     els.hitsList.append(card);
@@ -513,6 +516,12 @@ function renderReg(reg) {
   const value = document.createElement("code");
   value.textContent = reg.value;
   box.append(name, value);
+  if (reg.resolved) {
+    const path = document.createElement("div");
+    path.className = "map-path";
+    path.textContent = `${reg.resolved.display} ${reg.resolved.region.pathname || ""}`.trim();
+    box.append(path);
+  }
 
   return box;
 }
