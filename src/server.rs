@@ -32,8 +32,9 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
+use futures::{stream, StreamExt};
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, StreamExt};
+use tokio_stream::wrappers::BroadcastStream;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -279,7 +280,10 @@ async fn get_hits(
 }
 
 async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
-    let stream = BroadcastStream::new(state.inner.hit_tx.subscribe()).filter_map(|result| {
+    let ready = stream::once(async {
+        Ok::<_, axum::Error>(Event::default().event("ready").data("{}"))
+    });
+    let hits = BroadcastStream::new(state.inner.hit_tx.subscribe()).filter_map(|result| async move {
         result.ok().map(|hit| {
             let data = serde_json::to_string(&hit)
                 .map_err(|e| axum::Error::new(e))?;
@@ -287,7 +291,7 @@ async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
         })
     });
 
-    Sse::new(stream)
+    Sse::new(ready.chain(hits))
         .keep_alive(KeepAlive::default())
         .into_response()
 }

@@ -1,5 +1,5 @@
 use crate::{filter::RegFilter, perf::PerfMap};
-use log::error;
+use log::{debug, error};
 use perf_event_open_sys as sys;
 use serde::Serialize;
 use std::sync::{
@@ -122,6 +122,7 @@ where
     if maps.is_empty() {
         anyhow::bail!("no valid perf map");
     }
+    debug!("watchpoint installed on {} thread(s)", maps.len());
 
     let cancel = Arc::new(AtomicBool::new(false));
     let mut threads = Vec::with_capacity(maps.len());

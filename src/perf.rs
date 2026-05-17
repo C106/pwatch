@@ -1,5 +1,5 @@
 use crate::arch;
-use log::warn;
+use log::{debug, warn};
 use nix::sys::mman::{MapFlags, ProtFlags};
 use perf_event_open_sys as sys;
 use std::{
@@ -9,10 +9,14 @@ use std::{
 };
 use tokio::io::unix::AsyncFd;
 
+const PERF_SAMPLE_TID: u64 = sys::bindings::PERF_SAMPLE_TID as u64;
+const PERF_SAMPLE_CALLCHAIN: u64 = sys::bindings::PERF_SAMPLE_CALLCHAIN as u64;
+const PERF_SAMPLE_REGS_USER: u64 = sys::bindings::PERF_SAMPLE_REGS_USER as u64;
+
 pub struct PerfMap {
     mmap_addr: usize,
     fd: AsyncFd<OwnedFd>,
-    backtrace: bool,
+    sample_type: u64,
 }
 
 pub struct SampleData {
@@ -58,6 +62,10 @@ impl PerfMap {
                 (sys::bindings::PERF_FLAG_FD_CLOEXEC) as u64,
             ))?)
         };
+        debug!(
+            "opened perf breakpoint pid={} type={} addr=0x{:x} len={} sample_type=0x{:x}",
+            pid, r#type, addr, len, attrs.sample_type
+        );
         let mmap_addr = unsafe {
             nix::sys::mman::mmap(
                 None,
@@ -79,7 +87,7 @@ impl PerfMap {
         Ok(Self {
             mmap_addr: mmap_addr as usize,
             fd: AsyncFd::new(perf_fd)?,
-            backtrace,
+            sample_type: attrs.sample_type,
         })
     }
 
@@ -95,44 +103,21 @@ impl PerfMap {
         loop {
             let guard = self.fd.readable().await?;
             while mmap_page_metadata.data_head != read_data_size {
-                let get_addr =
-                    |offset: usize| data_addr + ((read_data_size as usize + offset) % data_size);
-                let data_header = unsafe {
-                    (get_addr(0) as *const sys::bindings::perf_event_header)
-                        .as_ref()
-                        .unwrap()
+                let mut reader = RingReader {
+                    data_addr,
+                    data_size,
+                    base_offset: read_data_size as usize,
+                    offset: 0,
                 };
-                let mut offset = std::mem::size_of::<sys::bindings::perf_event_header>();
+                let data_header = reader.read_header();
                 if data_header.type_ == sys::bindings::PERF_RECORD_SAMPLE {
-                    let pid = unsafe { *(get_addr(offset) as *const u32) };
-                    offset += 4;
-                    let tid = unsafe { *(get_addr(offset) as *const u32) };
-                    offset += 4;
-                    let backtrace = self.backtrace.then(|| {
-                        let backtrace_size = unsafe { *(get_addr(offset) as *const u64) };
-                        offset += 8;
-                        (0..backtrace_size)
-                            .map(|_| {
-                                let addr = unsafe { *(get_addr(offset) as *const u64) };
-                                offset += 8;
-                                addr
-                            })
-                            .collect()
-                    });
-                    offset += 8;
-                    let mut regs = vec![0u64; arch::regs_count()];
-                    for reg in regs.iter_mut().take(arch::regs_count()) {
-                        *reg = unsafe { *(get_addr(offset) as *const u64) };
-                        offset += 8;
+                    reader.offset = std::mem::size_of::<sys::bindings::perf_event_header>();
+                    if let Some(data) = self.read_sample(&mut reader) {
+                        handle(data);
                     }
-                    handle(SampleData {
-                        pid,
-                        tid,
-                        regs,
-                        backtrace,
-                    });
                 } else if data_header.type_ == sys::bindings::PERF_RECORD_LOST {
-                    let lost = unsafe { *(get_addr(offset) as *const u64) };
+                    reader.offset = std::mem::size_of::<sys::bindings::perf_event_header>();
+                    let lost = reader.read_u64();
                     warn!("Lost {} events", lost);
                 } else {
                     warn!("Unknown type");
@@ -142,5 +127,84 @@ impl PerfMap {
             }
             drop(guard);
         }
+    }
+
+    fn read_sample(&self, reader: &mut RingReader) -> Option<SampleData> {
+        let mut pid = 0;
+        let mut tid = 0;
+        let mut backtrace = None;
+        let mut regs = Vec::new();
+
+        if self.sample_type & PERF_SAMPLE_TID != 0 {
+            pid = reader.read_u32();
+            tid = reader.read_u32();
+        }
+
+        if self.sample_type & PERF_SAMPLE_CALLCHAIN != 0 {
+            let backtrace_size = reader.read_u64();
+            backtrace = Some(
+                (0..backtrace_size)
+                    .map(|_| reader.read_u64())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        if self.sample_type & PERF_SAMPLE_REGS_USER != 0 {
+            let abi = reader.read_u64();
+            if abi == 0 {
+                warn!("sample has no user register ABI");
+                return None;
+            }
+            regs = vec![0u64; arch::regs_count()];
+            for reg in regs.iter_mut() {
+                *reg = reader.read_u64();
+            }
+        }
+
+        Some(SampleData {
+            pid,
+            tid,
+            regs,
+            backtrace,
+        })
+    }
+}
+
+struct RingReader {
+    data_addr: usize,
+    data_size: usize,
+    base_offset: usize,
+    offset: usize,
+}
+
+impl RingReader {
+    fn read_header(&mut self) -> sys::bindings::perf_event_header {
+        sys::bindings::perf_event_header {
+            type_: self.read_u32(),
+            misc: self.read_u16(),
+            size: self.read_u16(),
+        }
+    }
+
+    fn read_u16(&mut self) -> u16 {
+        u16::from_ne_bytes(self.read_array())
+    }
+
+    fn read_u32(&mut self) -> u32 {
+        u32::from_ne_bytes(self.read_array())
+    }
+
+    fn read_u64(&mut self) -> u64 {
+        u64::from_ne_bytes(self.read_array())
+    }
+
+    fn read_array<const N: usize>(&mut self) -> [u8; N] {
+        let mut out = [0u8; N];
+        for byte in &mut out {
+            let ring_offset = (self.base_offset + self.offset) % self.data_size;
+            *byte = unsafe { *((self.data_addr + ring_offset) as *const u8) };
+            self.offset += 1;
+        }
+        out
     }
 }

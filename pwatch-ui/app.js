@@ -1,6 +1,8 @@
 const state = {
   apiBase: localStorage.getItem("pwatch.apiBase") || "http://127.0.0.1:8080",
   eventSource: null,
+  streamAbort: null,
+  streamReadyTimer: 0,
   breakpoints: [],
   hits: [],
   processes: [],
@@ -198,35 +200,120 @@ async function deleteBreakpoint(id) {
 }
 
 function openStream() {
+  closeStream();
   const source = new EventSource(apiUrl("/hits/stream"));
   state.eventSource = source;
   els.streamState.textContent = "SSE connecting";
+  state.streamReadyTimer = window.setTimeout(() => {
+    if (state.eventSource === source && source.readyState !== EventSource.OPEN) {
+      source.close();
+      state.eventSource = null;
+      openFetchStream();
+    }
+  }, 2000);
 
   source.addEventListener("open", () => {
+    window.clearTimeout(state.streamReadyTimer);
+    els.streamState.textContent = "SSE live";
+  });
+
+  source.addEventListener("ready", () => {
+    window.clearTimeout(state.streamReadyTimer);
     els.streamState.textContent = "SSE live";
   });
 
   source.addEventListener("hit", (event) => {
     const hit = JSON.parse(event.data);
-    state.hits.push(hit);
-    const limit = Number(els.hitLimit.value || 100);
-    if (state.hits.length > limit) {
-      state.hits.splice(0, state.hits.length - limit);
-    }
-    renderHits();
+    appendHit(hit);
   });
 
   source.addEventListener("error", () => {
-    els.streamState.textContent = "SSE reconnecting";
+    els.streamState.textContent = source.readyState === EventSource.CLOSED
+      ? "SSE closed"
+      : "SSE reconnecting";
   });
 }
 
 function closeStream() {
+  window.clearTimeout(state.streamReadyTimer);
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
   }
+  if (state.streamAbort) {
+    state.streamAbort.abort();
+    state.streamAbort = null;
+  }
   els.streamState.textContent = "SSE idle";
+}
+
+async function openFetchStream() {
+  const abort = new AbortController();
+  state.streamAbort = abort;
+  els.streamState.textContent = "SSE fetch";
+
+  try {
+    const response = await fetch(apiUrl("/hits/stream"), {
+      headers: { Accept: "text/event-stream" },
+      signal: abort.signal,
+    });
+    if (!response.ok || !response.body) {
+      throw new Error(`${response.status} ${response.statusText}`);
+    }
+    els.streamState.textContent = "SSE live";
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    loop: while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const idx = buffer.indexOf("\n\n");
+        if (idx < 0) {
+          continue loop;
+        }
+        const frame = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        handleSseFrame(frame);
+      }
+    }
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      els.streamState.textContent = "SSE disconnected";
+      showError(`SSE stream failed: ${error.message}`);
+    }
+  }
+}
+
+function handleSseFrame(frame) {
+  const lines = frame.split(/\r?\n/);
+  const event = lines
+    .find((line) => line.startsWith("event:"))
+    ?.slice("event:".length)
+    .trim() || "message";
+  const data = lines
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice("data:".length).trimStart())
+    .join("\n");
+
+  if (event === "ready") {
+    els.streamState.textContent = "SSE live";
+  } else if (event === "hit" && data) {
+    appendHit(JSON.parse(data));
+  }
+}
+
+function appendHit(hit) {
+  state.hits.push(hit);
+  const limit = Number(els.hitLimit.value || 100);
+  if (state.hits.length > limit) {
+    state.hits.splice(0, state.hits.length - limit);
+  }
+  renderHits();
 }
 
 function renderBreakpoints() {
