@@ -146,11 +146,13 @@ fn tokenize(input: &str) -> anyhow::Result<Vec<String>> {
 
         if matches!(ch, '=' | '!' | '>' | '<' | '&' | '|') {
             let mut token = ch.to_string();
-            if chars.peek() == Some(&'=') && matches!(ch, '=' | '!' | '>' | '<') {
-                token.push(chars.next().unwrap());
-            } else if chars.peek() == Some(&'&') && ch == '&' {
-                token.push(chars.next().unwrap());
-            } else if chars.peek() == Some(&'|') && ch == '|' {
+            let continues_operator = match ch {
+                '=' | '!' | '>' | '<' => chars.peek() == Some(&'='),
+                '&' => chars.peek() == Some(&'&'),
+                '|' => chars.peek() == Some(&'|'),
+                _ => false,
+            };
+            if continues_operator {
                 token.push(chars.next().unwrap());
             }
             tokens.push(token);

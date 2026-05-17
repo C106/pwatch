@@ -184,11 +184,11 @@ fn handle_event(data: SampleData) {
     );
     for (i, reg) in data.regs.iter().enumerate() {
         print!("{:>5}: 0x{:016x} ", arch::id_to_str(i).bold().blue(), reg);
-        if (i + 1) % 4 == 0 {
+        if (i + 1).is_multiple_of(4) {
             println!();
         }
     }
-    if data.regs.len() % 4 != 0 {
+    if !data.regs.len().is_multiple_of(4) {
         println!();
     }
     if let Some(backtrace) = data.backtrace {

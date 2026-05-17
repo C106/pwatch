@@ -317,7 +317,7 @@ async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
     let hits =
         BroadcastStream::new(state.inner.hit_tx.subscribe()).filter_map(|result| async move {
             result.ok().map(|hit| {
-                let data = serde_json::to_string(&hit).map_err(|e| axum::Error::new(e))?;
+                let data = serde_json::to_string(&hit).map_err(axum::Error::new)?;
                 Ok::<_, axum::Error>(Event::default().event("hit").data(data))
             })
         });
@@ -496,7 +496,7 @@ fn spawn_hit_worker(state: AppState, mut sample_rx: mpsc::Receiver<QueuedSample>
             );
             state.push_hit(hit);
             processed += 1;
-            if processed % 128 == 0 {
+            if processed.is_multiple_of(128) {
                 tokio::task::yield_now().await;
             }
         }

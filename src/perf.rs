@@ -11,9 +11,9 @@ use std::{
 };
 use tokio::io::unix::AsyncFd;
 
-const PERF_SAMPLE_TID: u64 = sys::bindings::PERF_SAMPLE_TID as u64;
-const PERF_SAMPLE_CALLCHAIN: u64 = sys::bindings::PERF_SAMPLE_CALLCHAIN as u64;
-const PERF_SAMPLE_REGS_USER: u64 = sys::bindings::PERF_SAMPLE_REGS_USER as u64;
+const PERF_SAMPLE_TID: u64 = sys::bindings::PERF_SAMPLE_TID;
+const PERF_SAMPLE_CALLCHAIN: u64 = sys::bindings::PERF_SAMPLE_CALLCHAIN;
+const PERF_SAMPLE_REGS_USER: u64 = sys::bindings::PERF_SAMPLE_REGS_USER;
 const MAX_EVENTS_PER_READINESS: usize = 128;
 
 pub struct PerfMap {
