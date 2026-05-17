@@ -35,7 +35,17 @@
           <form id="breakpointForm">
             <label>
               PID
-              <input id="pid" type="number" min="1" required placeholder="31737">
+              <div class="pid-picker">
+                <input id="pid" type="number" min="1" required placeholder="31737" autocomplete="off">
+                <div id="processPopup" class="process-popup" hidden>
+                  <div class="process-popup-head">
+                    <input id="processSearch" type="search" spellcheck="false" placeholder="Search process">
+                    <button id="processRefreshBtn" class="secondary compact" type="button">Refresh</button>
+                  </div>
+                  <div id="processCount" class="subtle-count">0 processes</div>
+                  <div id="processList" class="process-list"></div>
+                </div>
+              </div>
             </label>
             <div class="field-grid">
               <label>
@@ -77,18 +87,6 @@
           </form>
         </section>
 
-        <section class="panel process-panel">
-          <div class="panel-title-row">
-            <h2>Processes</h2>
-            <button id="processRefreshBtn" class="secondary compact" type="button">Refresh</button>
-          </div>
-          <label>
-            Search
-            <input id="processSearch" type="search" spellcheck="false" placeholder="pid, name, command">
-          </label>
-          <div id="processCount" class="subtle-count">0 processes</div>
-          <div id="processList" class="process-list"></div>
-        </section>
       </aside>
 
       <main class="workspace">

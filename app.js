@@ -20,6 +20,7 @@ const els = {
   backtrace: document.querySelector("#backtrace"),
   bufSize: document.querySelector("#bufSize"),
   filter: document.querySelector("#filter"),
+  processPopup: document.querySelector("#processPopup"),
   processRefreshBtn: document.querySelector("#processRefreshBtn"),
   processSearch: document.querySelector("#processSearch"),
   processCount: document.querySelector("#processCount"),
@@ -45,8 +46,19 @@ els.apiBase.value = state.apiBase;
 
 els.connectBtn.addEventListener("click", connect);
 els.refreshBtn.addEventListener("click", refreshAll);
-els.processRefreshBtn.addEventListener("click", loadProcesses);
+els.pid.addEventListener("focus", openProcessPopup);
+els.pid.addEventListener("click", openProcessPopup);
+els.pid.addEventListener("input", () => {
+  els.mapsPid.value = els.pid.value;
+});
+els.processRefreshBtn.addEventListener("click", () => loadProcesses());
 els.processSearch.addEventListener("input", debounce(loadProcesses, 250));
+document.addEventListener("pointerdown", closeProcessPopupOnOutsideClick);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeProcessPopup();
+  }
+});
 els.tabs.forEach((tab) => {
   tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
 });
@@ -274,6 +286,7 @@ function renderProcesses() {
       els.pid.value = process.pid;
       els.mapsPid.value = process.pid;
       loadMaps().catch((error) => showError(error.message));
+      closeProcessPopup();
       els.addr.focus();
     });
 
@@ -295,6 +308,32 @@ function renderProcesses() {
     item.append(title, meta);
     els.processList.append(item);
   }
+}
+
+async function openProcessPopup() {
+  els.processPopup.hidden = false;
+  if (state.processes.length === 0) {
+    try {
+      await loadProcesses();
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+}
+
+function closeProcessPopup() {
+  els.processPopup.hidden = true;
+}
+
+function closeProcessPopupOnOutsideClick(event) {
+  if (
+    els.processPopup.hidden
+    || els.processPopup.contains(event.target)
+    || els.pid.contains(event.target)
+  ) {
+    return;
+  }
+  closeProcessPopup();
 }
 
 function renderMaps() {

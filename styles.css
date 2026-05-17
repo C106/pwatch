@@ -222,20 +222,43 @@ label {
   margin-top: 12px;
 }
 
-.process-panel {
-  margin-bottom: 0;
-}
-
 .subtle-count {
   margin: 10px 0 8px;
   color: var(--muted);
   font-size: 12px;
 }
 
+.pid-picker {
+  position: relative;
+}
+
+.process-popup {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111418;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.45);
+  padding: 10px;
+}
+
+.process-popup[hidden] {
+  display: none;
+}
+
+.process-popup-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
 .process-list {
   display: grid;
   gap: 6px;
-  max-height: 320px;
+  max-height: 360px;
   overflow-y: auto;
   padding-right: 4px;
 }
