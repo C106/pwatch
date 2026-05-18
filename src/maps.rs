@@ -1,3 +1,4 @@
+use log::{debug, warn};
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -161,23 +162,45 @@ impl MapsCache {
         pid: u32,
         force_refresh: bool,
     ) -> anyhow::Result<Vec<ParsedRegion>> {
+        {
+            let inner = self
+                .inner
+                .lock()
+                .map_err(|_| anyhow::anyhow!("maps cache lock poisoned"))?;
+            let stale = inner
+                .get(&pid)
+                .map(|cached| now.duration_since(cached.loaded_at) >= Duration::from_secs(1))
+                .unwrap_or(true);
+
+            if !force_refresh && !stale {
+                return Ok(inner
+                    .get(&pid)
+                    .map(|cached| cached.regions.clone())
+                    .unwrap_or_default());
+            }
+        }
+
+        let regions = read_maps(pid)?;
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| anyhow::anyhow!("maps cache lock poisoned"))?;
-        let stale = inner
-            .get(&pid)
-            .map(|cached| now.duration_since(cached.loaded_at) >= Duration::from_secs(1))
-            .unwrap_or(true);
-
-        if force_refresh || stale {
+        let should_update = force_refresh
+            || inner
+                .get(&pid)
+                .map(|cached| now.duration_since(cached.loaded_at) >= Duration::from_secs(1))
+                .unwrap_or(true);
+        if should_update {
+            debug!("refreshed maps cache pid={} regions={}", pid, regions.len());
             inner.insert(
                 pid,
                 CachedMaps {
                     loaded_at: now,
-                    regions: read_maps(pid)?,
+                    regions,
                 },
             );
+        } else {
+            warn!("discarded duplicate maps refresh pid={}", pid);
         }
 
         Ok(inner

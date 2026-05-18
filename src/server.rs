@@ -22,6 +22,7 @@ use axum::{
     Json, Router,
 };
 use futures::{stream, StreamExt};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, VecDeque},
@@ -32,7 +33,8 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
@@ -132,6 +134,10 @@ struct ErrorBody {
 }
 
 pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
+    info!(
+        "starting server listen={} hit_buffer={} sample_queue_capacity={}",
+        config.listen, config.hit_buffer, SAMPLE_QUEUE_CAPACITY
+    );
     let (hit_tx, _) = broadcast::channel(1024);
     let (sample_tx, sample_rx) = mpsc::channel(SAMPLE_QUEUE_CAPACITY);
     let state = AppState {
@@ -164,6 +170,7 @@ pub async fn serve(config: ServerConfig) -> anyhow::Result<()> {
         .layer(middleware::from_fn(add_cors_headers));
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
+    info!("server listening on {}", config.listen);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -172,9 +179,37 @@ async fn create_breakpoint(
     State(state): State<AppState>,
     Json(request): Json<CreateBreakpointRequest>,
 ) -> impl IntoResponse {
-    match create_breakpoint_inner(state, request) {
-        Ok(view) => (StatusCode::CREATED, Json(view)).into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+    let pid = request.pid;
+    let type_name = request.type_name.clone();
+    let addr = request.addr.clone();
+    info!(
+        "create breakpoint requested pid={} type={} addr={}",
+        pid, type_name, addr
+    );
+    match tokio::task::spawn_blocking(move || create_breakpoint_inner(state, request)).await {
+        Ok(Ok(view)) => {
+            info!(
+                "created breakpoint id={} pid={} threads={}",
+                view.id,
+                view.pid,
+                view.threads.len()
+            );
+            (StatusCode::CREATED, Json(view)).into_response()
+        }
+        Ok(Err(e)) => {
+            warn!("create breakpoint failed pid={} addr={}: {}", pid, addr, e);
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+        Err(e) => {
+            error!(
+                "create breakpoint worker failed pid={} addr={}: {}",
+                pid, addr, e
+            );
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "create breakpoint worker failed",
+            )
+        }
     }
 }
 
@@ -264,10 +299,13 @@ async fn list_breakpoints(State(state): State<AppState>) -> impl IntoResponse {
             views.sort_by_key(|view| view.id);
             Json(views).into_response()
         }
-        Err(_) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "breakpoint lock poisoned",
-        ),
+        Err(_) => {
+            error!("breakpoint lock poisoned while listing breakpoints");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "breakpoint lock poisoned",
+            )
+        }
     }
 }
 
@@ -278,17 +316,23 @@ async fn delete_breakpoint(
     let entry = match state.inner.breakpoints.lock() {
         Ok(mut breakpoints) => breakpoints.remove(&id),
         Err(_) => {
+            error!(
+                "breakpoint lock poisoned while deleting breakpoint id={}",
+                id
+            );
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "breakpoint lock poisoned",
-            )
+            );
         }
     };
 
     if let Some(entry) = entry {
         entry.watch.stop().await;
+        info!("deleted breakpoint id={}", id);
         StatusCode::NO_CONTENT.into_response()
     } else {
+        warn!("delete breakpoint failed id={} reason=not_found", id);
         error_response(StatusCode::NOT_FOUND, format!("breakpoint {id} not found"))
     }
 }
@@ -304,14 +348,18 @@ async fn get_hits(
             hits.reverse();
             Json(hits).into_response()
         }
-        Err(_) => error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "hit buffer lock poisoned",
-        ),
+        Err(_) => {
+            error!("hit buffer lock poisoned while reading hits");
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "hit buffer lock poisoned",
+            )
+        }
     }
 }
 
 async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
+    debug!("hit stream connected");
     let ready =
         stream::once(async { Ok::<_, axum::Error>(Event::default().event("ready").data("{}")) });
     let hits =
@@ -328,16 +376,33 @@ async fn stream_hits(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_processes(Query(query): Query<ProcessesQuery>) -> impl IntoResponse {
-    match read_processes(query) {
-        Ok(processes) => Json(processes).into_response(),
-        Err(e) => error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    match tokio::task::spawn_blocking(move || read_processes(query)).await {
+        Ok(Ok(processes)) => Json(processes).into_response(),
+        Ok(Err(e)) => {
+            warn!("list processes failed: {}", e);
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
+        Err(e) => {
+            error!("list processes worker failed: {}", e);
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "list processes worker failed",
+            )
+        }
     }
 }
 
 async fn list_maps(State(state): State<AppState>, Path(pid): Path<u32>) -> impl IntoResponse {
-    match state.inner.maps.list(pid) {
-        Ok(maps) => Json(maps).into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+    match tokio::task::spawn_blocking(move || state.inner.maps.list(pid)).await {
+        Ok(Ok(maps)) => Json(maps).into_response(),
+        Ok(Err(e)) => {
+            warn!("list maps failed pid={}: {}", pid, e);
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+        Err(e) => {
+            error!("list maps worker failed pid={}: {}", pid, e);
+            error_response(StatusCode::INTERNAL_SERVER_ERROR, "list maps worker failed")
+        }
     }
 }
 
@@ -346,9 +411,21 @@ async fn resolve_address(
     Path(pid): Path<u32>,
     Query(query): Query<ResolveQuery>,
 ) -> impl IntoResponse {
-    match state.inner.maps.resolve_expression(pid, &query.addr) {
-        Ok(resolved) => Json(resolved).into_response(),
-        Err(e) => error_response(StatusCode::BAD_REQUEST, e.to_string()),
+    let addr = query.addr;
+    match tokio::task::spawn_blocking(move || state.inner.maps.resolve_expression(pid, &addr)).await
+    {
+        Ok(Ok(resolved)) => Json(resolved).into_response(),
+        Ok(Err(e)) => {
+            warn!("resolve address failed pid={}: {}", pid, e);
+            error_response(StatusCode::BAD_REQUEST, e.to_string())
+        }
+        Err(e) => {
+            error!("resolve address worker failed pid={}: {}", pid, e);
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "resolve address worker failed",
+            )
+        }
     }
 }
 
@@ -476,31 +553,44 @@ impl AppState {
 }
 
 fn spawn_hit_worker(state: AppState, mut sample_rx: mpsc::Receiver<QueuedSample>) {
-    tokio::spawn(async move {
-        let mut processed = 0usize;
-        while let Some(sample) = sample_rx.recv().await {
-            let reg_resolutions = state
-                .inner
-                .maps
-                .resolve_many_addresses(sample.pid, &sample.data.regs);
-            let backtrace_resolutions = sample
-                .data
-                .backtrace
-                .as_ref()
-                .map(|frames| state.inner.maps.resolve_many_addresses(sample.pid, frames));
-            let hit = state.inner.hit_factory.make_hit_with_maps(
-                sample.breakpoint_id,
-                sample.data,
-                reg_resolutions,
-                backtrace_resolutions,
-            );
-            state.push_hit(hit);
-            processed += 1;
-            if processed.is_multiple_of(128) {
-                tokio::task::yield_now().await;
+    if let Err(e) = thread::Builder::new()
+        .name("pwatch-hit-worker".to_string())
+        .spawn(move || {
+            info!("hit worker started");
+            let mut processed = 0u64;
+            let mut last_log = Instant::now();
+            while let Some(sample) = sample_rx.blocking_recv() {
+                let reg_resolutions = state
+                    .inner
+                    .maps
+                    .resolve_many_addresses(sample.pid, &sample.data.regs);
+                let backtrace_resolutions = sample
+                    .data
+                    .backtrace
+                    .as_ref()
+                    .map(|frames| state.inner.maps.resolve_many_addresses(sample.pid, frames));
+                let hit = state.inner.hit_factory.make_hit_with_maps(
+                    sample.breakpoint_id,
+                    sample.data,
+                    reg_resolutions,
+                    backtrace_resolutions,
+                );
+                state.push_hit(hit);
+                processed += 1;
+                if last_log.elapsed() >= Duration::from_secs(30) {
+                    let dropped = state.inner.dropped_samples.load(Ordering::Relaxed);
+                    info!(
+                        "hit worker processed={} dropped_samples={} buffered_limit={}",
+                        processed, dropped, state.inner.hit_buffer_limit
+                    );
+                    last_log = Instant::now();
+                }
             }
-        }
-    });
+            info!("hit worker stopped processed={}", processed);
+        })
+    {
+        error!("failed to start hit worker: {}", e);
+    }
 }
 
 fn now_ms() -> u128 {
@@ -521,11 +611,33 @@ fn error_response(status: StatusCode, error: impl ToString) -> axum::response::R
 }
 
 async fn add_cors_headers(request: Request<Body>, next: Next) -> axum::response::Response {
+    let method = request.method().clone();
+    let uri = request.uri().clone();
+    let start = Instant::now();
     let mut response = if request.method() == Method::OPTIONS {
         StatusCode::NO_CONTENT.into_response()
     } else {
         next.run(request).await
     };
+    let elapsed = start.elapsed();
+    let status = response.status();
+    if elapsed >= Duration::from_millis(500) || status.is_server_error() {
+        warn!(
+            "request method={} uri={} status={} elapsed_ms={}",
+            method,
+            uri,
+            status.as_u16(),
+            elapsed.as_millis()
+        );
+    } else {
+        info!(
+            "request method={} uri={} status={} elapsed_ms={}",
+            method,
+            uri,
+            status.as_u16(),
+            elapsed.as_millis()
+        );
+    }
     let headers = response.headers_mut();
     headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     headers.insert(
