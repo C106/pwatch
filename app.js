@@ -509,7 +509,10 @@ function renderHits() {
     if (hit.backtrace?.length) {
       const trace = document.createElement("div");
       trace.className = "map-path";
-      trace.textContent = `backtrace: ${hit.backtrace.join(" -> ")}`;
+      const frames = hit.backtrace_resolved?.length
+        ? hit.backtrace_resolved.map((frame) => frame.display || frame.value)
+        : hit.backtrace;
+      trace.textContent = `backtrace: ${frames.join(" -> ")}`;
       card.append(trace);
     }
     els.hitsList.append(card);
@@ -523,7 +526,10 @@ function renderReg(reg) {
   name.className = "reg-name";
   name.textContent = reg.name;
   const value = document.createElement("code");
-  value.textContent = reg.value;
+  value.textContent = reg.display || reg.value;
+  if (reg.display && reg.display !== reg.value) {
+    value.title = reg.value;
+  }
   box.append(name, value);
 
   return box;
