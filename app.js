@@ -33,6 +33,8 @@ const els = {
   breakpointCount: document.querySelector("#breakpointCount"),
   breakpointsBody: document.querySelector("#breakpointsBody"),
   hitLimit: document.querySelector("#hitLimit"),
+  hitFilter: document.querySelector("#hitFilter"),
+  hitGrouping: document.querySelector("#hitGrouping"),
   hitCount: document.querySelector("#hitCount"),
   hitsList: document.querySelector("#hitsList"),
   streamState: document.querySelector("#streamState"),
@@ -73,6 +75,8 @@ els.clearHitsBtn.addEventListener("click", () => {
   renderHits();
 });
 els.hitLimit.addEventListener("change", loadHits);
+els.hitFilter.addEventListener("input", renderHits);
+els.hitGrouping.addEventListener("change", renderHits);
 els.form.addEventListener("submit", createBreakpoint);
 
 renderBreakpoints();
@@ -472,15 +476,72 @@ function mapMatches(map, query) {
 }
 
 function renderHits() {
-  els.hitCount.textContent = `${state.hits.length} events`;
+  const filteredHits = getFilteredHits();
+  const groupedHits = els.hitGrouping.value === "backtrace"
+    ? groupHitsByBacktrace(filteredHits)
+    : filteredHits.map((hit) => ({ hit, count: 1 }));
+  const suffix = els.hitGrouping.value === "backtrace"
+    ? `${groupedHits.length} groups / ${filteredHits.length} events`
+    : `${filteredHits.length} / ${state.hits.length} events`;
+  els.hitCount.textContent = suffix;
   els.hitsList.replaceChildren();
 
-  if (state.hits.length === 0) {
+  if (groupedHits.length === 0) {
     els.hitsList.append(els.emptyTemplate.content.cloneNode(true));
     return;
   }
 
-  for (const hit of [...state.hits].reverse()) {
+  for (const { hit, count } of [...groupedHits].reverse()) {
+    els.hitsList.append(renderHitCard(hit, count));
+  }
+}
+
+function getFilteredHits() {
+  const query = els.hitFilter.value.trim().toLowerCase();
+  if (!query) {
+    return state.hits;
+  }
+  return state.hits.filter((hit) => hitSearchText(hit).includes(query));
+}
+
+function hitSearchText(hit) {
+  const frames = getBacktraceFrames(hit);
+  const registers = (hit.regs || []).flatMap((reg) => [reg.name, reg.value, reg.display]);
+  return [
+    hit.seq,
+    hit.breakpoint_id,
+    hit.pid,
+    hit.tid,
+    hit.timestamp_ms,
+    ...registers,
+    ...frames,
+  ].filter((value) => value != null).join(" ").toLowerCase();
+}
+
+function groupHitsByBacktrace(hits) {
+  const groups = new Map();
+  for (const hit of hits) {
+    const frames = getBacktraceFrames(hit);
+    const key = JSON.stringify(frames);
+    const group = groups.get(key);
+    if (group) {
+      group.count += 1;
+      group.hit = hit;
+    } else {
+      groups.set(key, { hit, count: 1 });
+    }
+  }
+  return [...groups.values()];
+}
+
+function getBacktraceFrames(hit) {
+  if (hit.backtrace_resolved?.length) {
+    return hit.backtrace_resolved.map((frame) => frame.display || frame.value);
+  }
+  return hit.backtrace || [];
+}
+
+function renderHitCard(hit, count) {
     const card = document.createElement("article");
     card.className = "hit-card";
 
@@ -494,6 +555,9 @@ function renderHits() {
       textSpan(`pid ${hit.pid}`),
       textSpan(`tid ${hit.tid}`),
     );
+    if (count > 1) {
+      title.append(textSpan(`${count} hits`));
+    }
     const meta = document.createElement("div");
     meta.className = "hit-meta";
     meta.textContent = new Date(Number(hit.timestamp_ms)).toLocaleString();
@@ -506,17 +570,14 @@ function renderHits() {
     }
 
     card.append(top, regs);
-    if (hit.backtrace?.length) {
+    const backtrace = getBacktraceFrames(hit);
+    if (backtrace.length) {
       const trace = document.createElement("div");
       trace.className = "map-path";
-      const frames = hit.backtrace_resolved?.length
-        ? hit.backtrace_resolved.map((frame) => frame.display || frame.value)
-        : hit.backtrace;
-      trace.textContent = `backtrace: ${frames.join(" -> ")}`;
+      trace.textContent = `backtrace: ${backtrace.join(" -> ")}`;
       card.append(trace);
     }
-    els.hitsList.append(card);
-  }
+    return card;
 }
 
 function renderReg(reg) {

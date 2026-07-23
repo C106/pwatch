@@ -361,6 +361,10 @@ label {
   width: 150px;
 }
 
+.toolbar-actions .hit-search {
+  width: min(280px, 28vw);
+}
+
 .tabs {
   display: flex;
   align-items: center;
